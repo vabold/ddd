@@ -9,6 +9,21 @@ public:
     static PayloadEntryFunc Run(Context *context);
 
 private:
+    class ApploaderState {
+    public:
+        enum {
+            Initialize = 0,
+            TestInserted = 1,
+            TestUninserted = 2,
+            WaitEjection = 3,
+            WaitInsertion = 4,
+            Done = 5,
+        };
+
+    private:
+        ApploaderState();
+    };
+
     Channel();
 
     static void RunApploader(Context *context);

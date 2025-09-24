@@ -201,51 +201,130 @@ Channel::PayloadEntryFunc Channel::Run(Context *context) {
     return payloadEntry;
 }
 
+// Helper function for giving the user instructions to change the disc
+static void DisplayDiscChangeMessage() {
+    if (Platform::IsDolphin()) {
+        WARN("Insert the Mario Kart: Double Dash!! disc by right-clicking the game");
+        WARN("in the game list and selecting \"Change Disc\".");
+        WARN("To avoid this in the future, select \"Set as Default ISO\" as well.");
+    } else {
+        WARN("Please insert a Mario Kart: Double Dash!! disc.");
+    }
+}
+
+// Helper function for giving the user instructions on how to rerun the apploader
+// TODO: Dolphin specific messages would be nice here
+static void DisplayApploaderErrorMessage() {
+    WARN("Something went wrong trying to run the apploader.");
+    WARN("You can try again by reinserting the disk.");
+}
+
 void Channel::RunApploader(Context *context) {
-    while (true) {
-        if (RunApploaderFromVirtualDI()) {
-            context->hasVirtualDI = true;
-            return;
-        }
-        if (DI::ReadDiscID()) {
-            const char *gameID = DiscID::Get().gameID;
-            if (DiscID::IsValid()) {
-                INFO("Mario Kart: Double Dash!! disc found (game id %.4s).", gameID);
-                if (Apploader::Run(DI::Read)) {
-                    context->hasVirtualDI = false;
-                    return;
-                }
-            } else {
-                ERROR("This is not Mario Kart: Double Dash!! (game id %.4s).", gameID);
+    s32 state = ApploaderState::Initialize;
+
+    while (state != ApploaderState::Done) {
+        switch (state) {
+        case ApploaderState::Initialize:
+            if (RunApploaderFromVirtualDI()) {
+                context->hasVirtualDI = true;
+                state = ApploaderState::Done;
+                break;
             }
-            while (DI::ReadDiscID()) {
-                Clock::WaitMilliseconds(100);
-                if (RunApploaderFromVirtualDI()) {
-                    context->hasVirtualDI = true;
-                    return;
-                }
-            }
-        } else {
+
             if (DI::IsInserted()) {
+                // Initialize the drive
+                DI::ReadDiscID();
                 INFO("Resetting disc interface...");
                 DI::Reset();
                 INFO("Reset disc interface.");
+
+                state = ApploaderState::TestInserted;
             } else {
-                if (Platform::IsDolphin()) {
-                    WARN("Insert the Mario Kart: Double Dash!! disc by right-clicking the game");
-                    WARN("in the game list and selecting \"Change Disc\".");
-                    WARN("To avoid this in the future, select \"Set as Default ISO\" as well.");
-                } else {
-                    WARN("Please insert a Mario Kart: Double Dash!! disc.");
-                }
-                while (!DI::IsInserted()) {
-                    Clock::WaitMilliseconds(100);
-                    if (RunApploaderFromVirtualDI()) {
-                        context->hasVirtualDI = true;
-                        return;
-                    }
-                }
+                state = ApploaderState::TestUninserted;
             }
+
+            break;
+        case ApploaderState::TestInserted:
+            // The disc could have been ejected during initialization
+            if (!DI::IsInserted()) {
+                ERROR("Disc was ejected before it could be read.");
+                DisplayDiscChangeMessage();
+                state = ApploaderState::WaitInsertion;
+                break;
+            }
+
+            // If we can't read the disc, just wait until we can
+            // TODO should we have a timeout period?
+            if (!DI::ReadDiscID()) {
+                Clock::WaitMilliseconds(100);
+                break;
+            }
+
+            {
+                const char *gameID = DiscID::Get().gameID;
+                if (!DiscID::IsValid()) {
+                    ERROR("This is not Mario Kart: Double Dash!! (game id %.4s).", gameID);
+                    DisplayDiscChangeMessage();
+                    state = ApploaderState::WaitEjection;
+                    break;
+                }
+
+                INFO("Mario Kart: Double Dash!! disc found (game id %.4s).", gameID);
+            }
+
+            // This function displays its own error messages
+            if (!Apploader::Run(DI::Read)) {
+                DisplayApploaderErrorMessage();
+                state = ApploaderState::WaitEjection;
+                break;
+            }
+
+            context->hasVirtualDI = false;
+            state = ApploaderState::Done;
+            break;
+        case ApploaderState::TestUninserted:
+            if (DI::IsInserted()) {
+                state = ApploaderState::Initialize;
+                break;
+            }
+
+            // Because we can only reinitialize if a disk is inserted, this state only happens once
+            // This could theoretically be retriggered by ejecting perfectly after WaitInsertion
+            // Therefore, do not do anything here that is very dependent on only being run once
+            DisplayDiscChangeMessage();
+            state = ApploaderState::WaitInsertion;
+            break;
+        case ApploaderState::WaitEjection:
+            if (!DI::IsInserted()) {
+                state = ApploaderState::WaitInsertion;
+                break;
+            }
+
+            Clock::WaitMilliseconds(100);
+            if (RunApploaderFromVirtualDI()) {
+                context->hasVirtualDI = true;
+                state = ApploaderState::Done;
+            }
+
+            break;
+        case ApploaderState::WaitInsertion:
+            if (DI::IsInserted()) {
+                state = ApploaderState::Initialize;
+                break;
+            }
+
+            Clock::WaitMilliseconds(100);
+            if (RunApploaderFromVirtualDI()) {
+                context->hasVirtualDI = true;
+                state = ApploaderState::Done;
+            }
+
+            break;
+        case ApploaderState::Done:
+            break;
+        default:
+            assert(!"Undefined apploader state");
+            break;
         }
     }
 }
