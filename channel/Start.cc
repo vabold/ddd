@@ -90,6 +90,12 @@ InitCPU:
     ori r3, r3, 0x0c64
     mthid0 r3
 
+    // Set paired singles
+    // MWCC compiles mfhid2/mthid2 to HID4, so we have to reference by SPR
+    mfspr r3, 920
+    oris r3, r3, 0xa000
+    mtspr 920, r3
+
     // Set FP
     li r7, 0x2000
     mtmsr r7
